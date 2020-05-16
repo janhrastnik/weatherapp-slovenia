@@ -1,14 +1,14 @@
 import 'dart:convert';
+import 'dart:math';
 import 'package:flutter/animation.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:xml/xml.dart' as xml;
 import 'package:http/http.dart' as http;
 import 'package:pinnable_listview/pinnable_listview.dart';
+import 'tile.dart';
 
 void main() => runApp(MyApp());
-
-bool isPinned = false;
 
 class MyApp extends StatelessWidget {
   @override
@@ -30,34 +30,24 @@ class MyApp extends StatelessWidget {
 
 class Home extends StatelessWidget {
   PinController pinController = PinController();
-  var locations;
+  List<GlobalKey<AppExpansionTileState>> globals = List();
+
+  List locations;
+
+  addKey(GlobalKey<AppExpansionTileState> key) {
+    globals.add(key);
+  }
+
+  collapseTiles() {
+    for (GlobalKey<AppExpansionTileState> key in globals) {
+      key.currentState.collapse();
+    }
+  }
 
   getData() async {
     String link = "http://meteo.arso.gov.si/uploads/probase/www/observ/surface/text/sl/observation_si_latest.xml";
     dynamic response = await http.get(link, headers: {'Content-Type': 'application/xml; charset=UTF-8'});
     return response.bodyBytes;
-  }
-
-  Widget getWeatherCard(i) {
-    xml.XmlElement location = locations[i];
-    String name = location.findAllElements('domain_longTitle').first.text;
-    String temp = "${location.findAllElements('t_degreesC').first.text} °C";
-    String humidity = "${location.findAllElements('rh').first.text} %";
-    String situation;
-    situation = location.findAllElements('nn_icon-wwsyn_icon').first.text;
-    if (situation.contains("_")) {
-      situation = situation.split("_")[1];
-    }
-    String windSpeed = "${ location.findAllElements('ff_val_kmh').first.text} km/h";
-    return WeatherCard(
-      name: name,
-      temp: temp,
-      situation: situation,
-      humidity: humidity,
-      windSpeed: windSpeed,
-      pinController: pinController,
-      index: i
-    );
   }
 
   @override
@@ -71,10 +61,31 @@ class Home extends StatelessWidget {
           if (snapshot.hasData) {
             xml.XmlDocument doc = xml.parse(utf8.decode(snapshot.data));
             locations = doc.findAllElements("metData").toList();
-            print(locations.first.children.toList().toString());
             return PinnableListView(
               pinController: pinController,
-              children: Iterable<int>.generate(locations.length).map((i) => getWeatherCard(i)).toList()
+              children: Iterable<int>.generate(locations.length).map((i) {
+                xml.XmlElement location = locations[i];
+                String name = location.findAllElements('domain_longTitle').first.text;
+                String temp = "${location.findAllElements('t_degreesC').first.text} °C";
+                String humidity = "${location.findAllElements('rh').first.text} %";
+                String situation;
+                situation = location.findAllElements('nn_icon-wwsyn_icon').first.text;
+                if (situation.contains("_")) {
+                  situation = situation.split("_")[1];
+                }
+                String windSpeed = "${ location.findAllElements('ff_val_kmh').first.text} km/h";
+                return WeatherCard(
+                    name: name,
+                    temp: temp,
+                    situation: situation,
+                    humidity: humidity,
+                    windSpeed: windSpeed,
+                    addKey: addKey,
+                    collapseTiles: collapseTiles,
+                    pinController: pinController,
+                    index: i
+                );
+              }).toList()
             );
           } else {
             return Center(child: CircularProgressIndicator());
@@ -87,12 +98,14 @@ class Home extends StatelessWidget {
 
 class WeatherCard extends StatefulWidget {
   WeatherCard({Key key, this.name, this.temp, this.situation, this.humidity,
-    this.windSpeed, this.pinController, this.index}) : super(key: key);
+    this.windSpeed, this.addKey, this.collapseTiles, this.pinController, this.index}) : super(key: key);
   final String name;
   final String temp;
   final String situation;
   final String humidity;
   final String windSpeed;
+  final Function(GlobalKey<AppExpansionTileState> key) addKey;
+  final Function collapseTiles;
   final PinController pinController;
   final int index;
 
@@ -105,33 +118,17 @@ class WeatherCardState extends State<WeatherCard> with SingleTickerProviderState
   ScrollController _titleScroll;
   bool scrolling = false;
   bool reverse = false;
-  bool pinned;
+  bool visible = true;
+  GlobalKey<AppExpansionTileState> expansionKey = GlobalKey();
 
   @override
   void initState() {
     super.initState();
-    pinned = false;
     _animationController = AnimationController(
         vsync: this,
         duration: Duration(milliseconds: 200)
     );
-    _titleScroll = ScrollController(initialScrollOffset: 0.0);
-    WidgetsBinding.instance.addPostFrameCallback(scroll);
-  }
-
-  void scroll(_) async {
-    while (_titleScroll.hasClients) {
-      await Future.delayed(Duration(seconds: 1));
-      if(_titleScroll.hasClients)
-        await _titleScroll.animateTo(
-          _titleScroll.position.maxScrollExtent,
-            duration: Duration(seconds: 3),
-            curve: Curves.ease);
-      await Future.delayed(Duration(seconds: 1));
-      if(_titleScroll.hasClients)
-        await _titleScroll.animateTo(0.0,
-            duration: Duration(seconds: 3), curve: Curves.easeOut);
-    }
+    widget.addKey(expansionKey);
   }
 
   @override
@@ -203,9 +200,13 @@ class WeatherCardState extends State<WeatherCard> with SingleTickerProviderState
           ),
           child: Stack(
             children: <Widget>[
-              ExpansionTile(
+              AppExpansionTile(
+                key: expansionKey,
                 backgroundColor: Colors.deepPurple,
                 onExpansionChanged: (_) {
+                  setState(() {
+                    visible = !visible;
+                  });
                   if (reverse) {
                     _animationController.reverse();
                     reverse = false;
@@ -226,28 +227,27 @@ class WeatherCardState extends State<WeatherCard> with SingleTickerProviderState
 
                 ),
                 title: Padding(
-                    padding: EdgeInsets.only(right: 50.0 + 50.0 * _animationController.value),
+                    padding: EdgeInsets.only(right: 50.0),
                     child: Transform(
                       transform: Matrix4.identity()
                         ..scale(scale)
-                        ..translate(15.0 * _animationController.value),
-                      child: SingleChildScrollView(
-                          controller: _titleScroll,
-                          scrollDirection: Axis.horizontal,
-                          child: Text(
-                              widget.name, style: TextStyle(color: Colors.white, fontSize: 16.0)
-                          )
+                        ..translate(15.0 * _animationController.value, -2.0 * _animationController.value),
+                      child: Text(
+                          widget.name, style: TextStyle(color: Colors.white, fontSize: 16.0)
                       ),
                     ),
                 ),
-                trailing: GestureDetector(
-                  child: Icon(isPinned && widget.pinController.index == widget.index ? Icons.star : Icons.star_border, color: Colors.white),
-                  onTap: () {
-                    setState(() {
-                      isPinned = !isPinned;
-                      widget.pinController.pin(widget.index);
-                    });
-                  },
+                trailing: Visibility(
+                  visible: visible,
+                  child: GestureDetector(
+                    child: Icon(widget.index == widget.pinController.pinned ? Icons.star : Icons.star_border, color: Colors.white),
+                    onTap: () {
+                      setState(() {
+                        widget.collapseTiles();
+                        widget.pinController.pin(widget.index);
+                      });
+                    },
+                  ),
                 ),
                 children: <Widget>[
                   Stack(
@@ -262,7 +262,13 @@ class WeatherCardState extends State<WeatherCard> with SingleTickerProviderState
                               Divider(color: Colors.deepPurple, height: 0.0), // bit of a hack to force max width on column, fix later
                               Padding(padding: EdgeInsets.all(8.0), child: Text("Vlažnost: ${widget.humidity}")),
                               Padding(padding: EdgeInsets.all(8.0), child: Text("Veter: ${widget.windSpeed}")),
-                              Padding(padding: EdgeInsets.all(8.0), child: Text("Napovedi"))
+                              Padding(padding: EdgeInsets.only(left: 8.0), child: FlatButton(
+                                child: Text("Napovedi", style: TextStyle(color: Colors.white)),
+                                color: Colors.green,
+                                onPressed: () {
+
+                                },
+                              ))
                             ],
                           ),
                         ),
@@ -273,14 +279,19 @@ class WeatherCardState extends State<WeatherCard> with SingleTickerProviderState
               ),
               Align(
                 alignment: Alignment.centerRight,
-                child: Transform(
-                  transform: Matrix4.identity()
-                    ..scale(scale)
-                    ..translate(-50.0 + 25.0 * _animationController.value, 50.0 * _animationController.value),
-                  child: CircleAvatar(
-                      backgroundColor: Colors.green,
-                      radius: 30.0,
-                      child: Text(widget.temp, style: TextStyle(color: Colors.white))),
+                child: GestureDetector(
+                  onTap: () {
+                    expansionKey.currentState.expand();
+                  },
+                  child: Transform(
+                    transform: Matrix4.identity()
+                      ..scale(scale)
+                      ..translate(-50.0 + 25.0 * _animationController.value, 55.0 * _animationController.value),
+                    child: CircleAvatar(
+                        backgroundColor: Colors.green,
+                        radius: 30.0,
+                        child: Text(widget.temp, style: TextStyle(color: Colors.white))),
+                  ),
                 ),
               )
             ],
