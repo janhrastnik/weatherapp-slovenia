@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:math';
 import 'package:flutter/animation.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
@@ -68,6 +67,7 @@ class Home extends StatelessWidget {
                 String name = location.findAllElements('domain_longTitle').first.text;
                 String temp = "${location.findAllElements('t_degreesC').first.text} °C";
                 String humidity = "${location.findAllElements('rh').first.text} %";
+                String region = location.findAllElements('domain_parentId').first.text;
                 String situation;
                 situation = location.findAllElements('nn_icon-wwsyn_icon').first.text;
                 if (situation.contains("_")) {
@@ -80,6 +80,7 @@ class Home extends StatelessWidget {
                     situation: situation,
                     humidity: humidity,
                     windSpeed: windSpeed,
+                    region: region,
                     addKey: addKey,
                     collapseTiles: collapseTiles,
                     pinController: pinController,
@@ -97,13 +98,18 @@ class Home extends StatelessWidget {
 }
 
 class WeatherCard extends StatefulWidget {
-  WeatherCard({Key key, this.name, this.temp, this.situation, this.humidity,
-    this.windSpeed, this.addKey, this.collapseTiles, this.pinController, this.index}) : super(key: key);
+  WeatherCard({
+    Key key, this.name, this.temp, this.situation, this.humidity,
+    this.windSpeed, this.region, this.addKey, this.collapseTiles,
+    this.pinController, this.index
+  }) : super(key: key);
+
   final String name;
   final String temp;
   final String situation;
   final String humidity;
   final String windSpeed;
+  final String region;
   final Function(GlobalKey<AppExpansionTileState> key) addKey;
   final Function collapseTiles;
   final PinController pinController;
@@ -182,6 +188,43 @@ class WeatherCardState extends State<WeatherCard> with SingleTickerProviderState
       image = Image.asset("assets/cloud.png", color: Colors.white);
     }
     return image;
+  }
+
+  Future getForecast() async {
+    String link = "http://meteo.arso.gov.si/uploads/probase/www/fproduct/text/sl/forecast_${widget.region}latest.xml";
+    dynamic response = await http.get(link, headers: {'Content-Type': 'application/xml; charset=UTF-8'});
+    return response.bodyBytes;
+  }
+
+  Future loadForecast() {
+    return showDialog(
+        context: context,
+        builder: (BuildContext context) {
+          return AlertDialog(
+            title: Text("Napoved"),
+            content: FutureBuilder(
+              future: getForecast(),
+              builder: (BuildContext context, AsyncSnapshot snapshot) {
+                if (snapshot.hasData) {
+                  xml.XmlDocument doc = xml.parse(utf8.decode(snapshot.data));
+                  List<xml.XmlElement> days = doc.findAllElements("metData").toList();
+                  List<List> dataList = Iterable.generate(2, (i) => []).toList();
+                  for (xml.XmlElement day in days) {
+                    dataList[0].add(day.findAllElements("valid_day").first.text);
+                    dataList[1].add(day.findAllElements("td").first.text);
+                  }
+                  return DataTable(
+                    columns: dataList[0].map((day) => DataColumn(label: Text(day))).toList(),
+                    rows: dataList.sublist(1).map((l) => DataRow(cells: l.map((data) => DataCell(Text(data))).toList())).toList(),
+                  );
+                } else {
+                  return CircularProgressIndicator();
+                }
+              },
+            ),
+          );
+        }
+    );
   }
 
   @override
@@ -266,7 +309,8 @@ class WeatherCardState extends State<WeatherCard> with SingleTickerProviderState
                                 child: Text("Napovedi", style: TextStyle(color: Colors.white)),
                                 color: Colors.green,
                                 onPressed: () {
-
+                                  print(widget.region);
+                                  loadForecast();
                                 },
                               ))
                             ],
@@ -301,5 +345,3 @@ class WeatherCardState extends State<WeatherCard> with SingleTickerProviderState
     );
   }
 }
-
-
