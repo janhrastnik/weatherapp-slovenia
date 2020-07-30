@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:xml/xml.dart' as xml;
 import 'package:http/http.dart' as http;
 import 'package:pinnable_listview/pinnable_listview.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'tile.dart';
 
 void main() => runApp(MyApp());
@@ -17,6 +18,7 @@ class MyApp extends StatelessWidget {
       title: 'Slovenija Vreme',
       theme: ThemeData(
         primarySwatch: Colors.green,
+        fontFamily: "Fira",
         textTheme: TextTheme(
           bodyText2: TextStyle(color: Colors.white)
         ),
@@ -28,10 +30,8 @@ class MyApp extends StatelessWidget {
 }
 
 class Home extends StatelessWidget {
-  PinController pinController = PinController();
+  final PinController pinController = PinController();
   List<GlobalKey<AppExpansionTileState>> globals = List();
-
-  List locations;
 
   addKey(GlobalKey<AppExpansionTileState> key) {
     globals.add(key);
@@ -43,10 +43,12 @@ class Home extends StatelessWidget {
     }
   }
 
-  getData() async {
+  Future<Map> getData() async {
     String link = "http://meteo.arso.gov.si/uploads/probase/www/observ/surface/text/sl/observation_si_latest.xml";
-    dynamic response = await http.get(link, headers: {'Content-Type': 'application/xml; charset=UTF-8'});
-    return response.bodyBytes;
+    http.Response response = await http.get(link, headers: {'Content-Type': 'application/xml; charset=UTF-8'});
+    SharedPreferences prefs = await SharedPreferences.getInstance();
+    String loc = prefs.getString("pinnedLocation");
+    return {"response": response.bodyBytes, "pinnedLocation": loc};
   }
 
   @override
@@ -56,11 +58,19 @@ class Home extends StatelessWidget {
       appBar: AppBar(title: Text("Vreme")),
       body: FutureBuilder(
         future: getData(),
-        builder: (BuildContext context, AsyncSnapshot snapshot) {
+        builder: (BuildContext context, AsyncSnapshot<Map> snapshot) {
           if (snapshot.hasData) {
-            xml.XmlDocument doc = xml.parse(utf8.decode(snapshot.data));
-            locations = doc.findAllElements("metData").toList();
+            xml.XmlDocument doc = xml.parse(utf8.decode(snapshot.data["response"]));
+            List locations = doc.findAllElements("metData").toList();
+            print(snapshot.data["pinnedLocation"]);
+            int pinnedIndex;
+            if (snapshot.data["pinnedLocation"] != null) {
+              pinnedIndex = locations.indexOf(locations.where((loc) {
+                return loc.findAllElements('domain_longTitle').first.text == snapshot.data["pinnedLocation"];
+              }).first);
+            }
             return PinnableListView(
+              initiallyPinned: pinnedIndex,
               pinController: pinController,
               children: Iterable<int>.generate(locations.length).map((i) {
                 xml.XmlElement location = locations[i];
@@ -126,10 +136,12 @@ class WeatherCardState extends State<WeatherCard> with SingleTickerProviderState
   bool reverse = false;
   bool visible = true;
   GlobalKey<AppExpansionTileState> expansionKey = GlobalKey();
+  SharedPreferences prefs;
 
   @override
   void initState() {
     super.initState();
+    getPrefs();
     _animationController = AnimationController(
         vsync: this,
         duration: Duration(milliseconds: 200)
@@ -137,6 +149,10 @@ class WeatherCardState extends State<WeatherCard> with SingleTickerProviderState
     widget.addKey(expansionKey);
   }
 
+  getPrefs() async {
+    prefs = await SharedPreferences.getInstance();
+  }
+  
   @override
   void didUpdateWidget(Widget oldWidget) {
     super.didUpdateWidget(oldWidget);
@@ -213,9 +229,12 @@ class WeatherCardState extends State<WeatherCard> with SingleTickerProviderState
                     dataList[0].add(day.findAllElements("valid_day").first.text);
                     dataList[1].add(day.findAllElements("td").first.text);
                   }
-                  return DataTable(
-                    columns: dataList[0].map((day) => DataColumn(label: Text(day))).toList(),
-                    rows: dataList.sublist(1).map((l) => DataRow(cells: l.map((data) => DataCell(Text(data))).toList())).toList(),
+                  return SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: DataTable(
+                      columns: dataList[0].map((day) => DataColumn(label: Text(day))).toList(),
+                      rows: dataList.sublist(1).map((l) => DataRow(cells: l.map((data) => DataCell(Text(data))).toList())).toList(),
+                    ),
                   );
                 } else {
                   return CircularProgressIndicator();
@@ -225,6 +244,20 @@ class WeatherCardState extends State<WeatherCard> with SingleTickerProviderState
           );
         }
     );
+  }
+
+  handlePin() async {
+    setState(() {
+      widget.collapseTiles();
+      if (widget.index == widget.pinController.pinned) {
+        // remove from shared pref
+        prefs.setString("pinnedLocation", null);
+      } else {
+        // add to shared pref
+        prefs.setString("pinnedLocation", widget.name);
+      }
+      widget.pinController.pin(widget.index);
+    });
   }
 
   @override
@@ -274,7 +307,7 @@ class WeatherCardState extends State<WeatherCard> with SingleTickerProviderState
                     child: Transform(
                       transform: Matrix4.identity()
                         ..scale(scale)
-                        ..translate(15.0 * _animationController.value, -2.0 * _animationController.value),
+                        ..translate(15.0 * _animationController.value, -3.0 * _animationController.value),
                       child: Text(
                           widget.name, style: TextStyle(color: Colors.white, fontSize: 16.0)
                       ),
@@ -284,12 +317,7 @@ class WeatherCardState extends State<WeatherCard> with SingleTickerProviderState
                   visible: visible,
                   child: GestureDetector(
                     child: Icon(widget.index == widget.pinController.pinned ? Icons.star : Icons.star_border, color: Colors.white),
-                    onTap: () {
-                      setState(() {
-                        widget.collapseTiles();
-                        widget.pinController.pin(widget.index);
-                      });
-                    },
+                    onTap: handlePin,
                   ),
                 ),
                 children: <Widget>[
@@ -308,10 +336,7 @@ class WeatherCardState extends State<WeatherCard> with SingleTickerProviderState
                               Padding(padding: EdgeInsets.only(left: 8.0), child: FlatButton(
                                 child: Text("Napovedi", style: TextStyle(color: Colors.white)),
                                 color: Colors.green,
-                                onPressed: () {
-                                  print(widget.region);
-                                  loadForecast();
-                                },
+                                onPressed: loadForecast,
                               ))
                             ],
                           ),
